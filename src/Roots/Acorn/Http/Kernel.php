@@ -21,8 +21,9 @@ class Kernel extends HttpKernel
     ];
 
     protected $middleware = [
-        \Illuminate\Http\Middleware\HandleCors::class,
         \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
+        \Roots\Acorn\Http\Middleware\RequestInterception::class,
+        \Illuminate\Http\Middleware\HandleCors::class,
         \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
     ];
 

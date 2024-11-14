@@ -2,11 +2,10 @@
 
 namespace Roots\Acorn;
 
-use Illuminate\Contracts\Foundation\Application as ApplicationContract;
-use Illuminate\Http\Response;
+use Illuminate\Support\Str;
 use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Facade;
-use Illuminate\Support\Str;
+use Illuminate\Contracts\Foundation\Application as ApplicationContract;
 use Roots\Acorn\Filesystem\Filesystem;
 
 use function get_theme_file_path;
@@ -44,7 +43,7 @@ class Bootloader
     public function __construct(?ApplicationContract $app = null, ?Filesystem $files = null)
     {
         $this->app = $app;
-        $this->files = $files ?? new Filesystem;
+        $this->files = $files ?? new Filesystem();
 
         static::$instance ??= $this;
     }
@@ -177,7 +176,9 @@ class Bootloader
      */
     protected function bootHttp(): void
     {
+        /** @var \Illuminate\Contracts\Http\Kernel $kernel */
         $kernel = $this->app->make(\Illuminate\Contracts\Http\Kernel::class);
+
         $request = \Illuminate\Http\Request::capture();
 
         $this->app->instance('request', $request);
@@ -185,136 +186,7 @@ class Bootloader
         Facade::clearResolvedInstance('request');
 
         $kernel->bootstrap($request);
-
-        $this->registerDefaultRoute();
-
-        try {
-            $route = $this->app->make('router')->getRoutes()->match($request);
-
-            $this->registerRequestHandler($kernel, $request, $route);
-        } catch (\Throwable) {
-            //
-        }
-    }
-
-    /**
-     * Register the default WordPress route.
-     */
-    protected function registerDefaultRoute(): void
-    {
-        $this->app->make('router')
-            ->any('{any?}', fn () => tap(response(''), function (Response $response) {
-                foreach (headers_list() as $header) {
-                    [$header, $value] = explode(': ', $header, 2);
-
-                    if (! headers_sent()) {
-                        header_remove($header);
-                    }
-
-                    $response->header($header, $value, $header !== 'Set-Cookie');
-                }
-
-                if ($this->app->hasDebugModeEnabled()) {
-                    $response->header('X-Powered-By', $this->app->version());
-                }
-
-                $response->setStatusCode(http_response_code());
-
-                $content = '';
-
-                $levels = ob_get_level();
-
-                for ($i = 0; $i < $levels; $i++) {
-                    $content .= ob_get_clean();
-                }
-
-                $response->setContent($content);
-            }))
-            ->where('any', '.*')
-            ->name('wordpress');
-    }
-
-    /**
-     * Register the request handler.
-     */
-    protected function registerRequestHandler(
-        \Illuminate\Contracts\Http\Kernel $kernel,
-        \Illuminate\Http\Request $request,
-        ?\Illuminate\Routing\Route $route
-    ): void {
-        $path = $request->getBaseUrl().$request->getPathInfo();
-
-        $except = collect([
-            admin_url(),
-            wp_login_url(),
-            wp_registration_url(),
-        ])->map(fn ($url) => parse_url($url, PHP_URL_PATH))->unique()->filter();
-
-        $api = parse_url(rest_url(), PHP_URL_PATH);
-
-        if (
-            Str::startsWith($path, $except->all()) ||
-            Str::endsWith($path, '.php')
-        ) {
-            return;
-        }
-
-        add_filter('do_parse_request', function ($condition, $wp, $params) use ($route) {
-            if (! $route) {
-                return $condition;
-            }
-
-            return apply_filters('acorn/router/do_parse_request', $condition, $wp, $params);
-        }, 100, 3);
-
-        if ($route->getName() !== 'wordpress') {
-            add_action('parse_request', fn () => $this->handleRequest($kernel, $request));
-
-            return;
-        }
-
-        if (! $this->shouldHandleDefaultRequest()) {
-            return;
-        }
-
-        if (redirect_canonical(null, false)) {
-            return;
-        }
-
-        $middleware = Str::startsWith($path, $api)
-            ? $this->app->config->get('router.wordpress.api', 'api')
-            : $this->app->config->get('router.wordpress.web', 'web');
-
-        $route->middleware($middleware);
-
-        ob_start();
-
-        remove_action('shutdown', 'wp_ob_end_flush_all', 1);
-        add_action('shutdown', fn () => $this->handleRequest($kernel, $request), 100);
-    }
-
-    /**
-     * Handle the request.
-     */
-    protected function handleRequest(
-        \Illuminate\Contracts\Http\Kernel $kernel,
-        \Illuminate\Http\Request $request
-    ): void {
-        $response = $kernel->handle($request);
-
-        $body = $response->send();
-
-        $kernel->terminate($request, $body);
-
-        exit((int) $response->isServerError());
-    }
-
-    /**
-     * Determine if the default WordPress request should be handled.
-     */
-    protected function shouldHandleDefaultRequest(): bool
-    {
-        return env('ACORN_ENABLE_EXPERIMENTAL_WORDPRESS_REQUEST_HANDLER', false);
+        $kernel->handle($request);
     }
 
     /**
@@ -436,7 +308,7 @@ class Bootloader
         $path = trim($path, '\\/');
 
         $searchPaths = [
-            $this->basePath().DIRECTORY_SEPARATOR.$path,
+            $this->basePath() . DIRECTORY_SEPARATOR . $path,
             get_theme_file_path($path),
         ];
 
@@ -457,7 +329,7 @@ class Bootloader
             'storage' => $this->fallbackStoragePath(),
             'app' => "{$this->basePath()}/app",
             'public' => "{$this->basePath()}/public",
-            default => dirname(__DIR__, 3)."/{$path}",
+            default => dirname(__DIR__, 3) . "/{$path}",
         };
     }
 
@@ -468,12 +340,14 @@ class Bootloader
     {
         $path = Str::finish(WP_CONTENT_DIR, '/cache/acorn');
 
-        foreach ([
+        foreach (
+            [
             'framework/cache/data',
             'framework/views',
             'framework/sessions',
             'logs',
-        ] as $directory) {
+            ] as $directory
+        ) {
             $this->files->ensureDirectoryExists("{$path}/{$directory}", 0755, true);
         }
 
