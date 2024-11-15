@@ -5,10 +5,10 @@ namespace Roots\Acorn\Http\Middleware;
 use Closure;
 use Illuminate\Support\Str;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
 use Illuminate\Routing\Route;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Contracts\Foundation\Application;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Intercepts HTTP requests and uses Wordpress to
@@ -32,10 +32,10 @@ class RequestInterception
      * Handle an incoming request.
      *
      * @param  Request $request The laravel request object.
-     * @param  \Closure  $next The next middleware to invoke.
+     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response) $next
      * @return mixed The result of the middleware invocation.
      */
-    public function handle(Request $request, Closure $next)
+    public function handle(Request $request, Closure $next): Response
     {
         $route = $request->route;
         $path = $request->getBaseUrl() . $request->getPathInfo();
@@ -47,11 +47,11 @@ class RequestInterception
 
         $this->applyAcornRouterFilters($route);
 
-        /** @var \Illuminate\Http\Response $response */
+        /** @var \Symfony\Component\HttpFoundation\Response $response */
         $response = $next($request);
 
         // When the router doesn't match the request, use Wordpress to handle it
-        if (method_exists($response, 'status') && $response->status() == 404) {
+        if ($response->isNotFound()) {
             $this->redirectIfCanonicalUrlExists();
             $this->applyConfiguredMiddleware($route, $path);
 
@@ -61,7 +61,7 @@ class RequestInterception
             add_action('shutdown', fn () => $this->handleWordpressRequest($response), 100);
         } else {
             // The router matched the request, it's for Laravel (not Wordpress)
-            add_action('parse_request', fn () => $this->handleRequest($response, false));
+            add_action('wp_body_open', fn () => $this->handleRequest($response));
         }
 
         return $response;
@@ -135,7 +135,7 @@ class RequestInterception
     /**
      * Called to attempt handling a URL request via Wordpress.
      *
-     * @param Response response The HTTP response object.
+     * @param Symfony\Component\HttpFoundation\Response response The HTTP response object.
      */
     private function handleWordpressRequest(Response $response)
     {
@@ -146,11 +146,11 @@ class RequestInterception
                 header_remove($header);
             }
 
-            $response->header($header, $value, $header !== 'Set-Cookie');
+            $response->headers->set($header, $value, $header !== 'Set-Cookie');
         }
 
         if ($this->app->hasDebugModeEnabled()) {
-            $response->header('X-Powered-By', $this->app->version());
+            $response->headers->set('X-Powered-By', $this->app->version());
         }
 
         $response->setStatusCode(http_response_code());
@@ -165,25 +165,23 @@ class RequestInterception
 
         $response->setContent($content);
 
-        $this->handleRequest($response, true);
+        $this->handleRequest($response);
     }
 
     /**
      * Called at the end of any request.
      *
-     * @param Response  response The HTTP response object.
-     * @param bool      renderedByWordpress Whether the response was rendered by wordpress or a laravel route.
+     * @param Symfony\Component\HttpFoundation\Response response
+     *  The HTTP response object.
      */
-    private function handleRequest(Response $response, bool $renderedByWordpress)
+    private function handleRequest(Response $response)
     {
         $request = $this->app->request;
 
-        $body = $response->send();
+        $response->send();
 
-        $this->kernel->terminate($request, $body);
+        $this->kernel->terminate($request, $response);
 
-        if (!$renderedByWordpress) {
-            exit((int) $response->isServerError());
-        }
+        exit((int) $response->isServerError());
     }
 }
